@@ -12,8 +12,9 @@ import (
 // https://docs.microsoft.com/en-us/onedrive/developer/rest-api/resources/itemreference
 type DriveItemParent struct {
 	//TODO Path is technically available, but we shouldn't use it
-	Path string `json:"path,omitempty"`
-	ID   string `json:"id,omitempty"`
+	Path    string `json:"path,omitempty"`
+	ID      string `json:"id,omitempty"`
+	DriveID string `json:"driveId,omitempty"`
 }
 
 // Folder is used for parsing only
@@ -41,6 +42,13 @@ type Deleted struct {
 	State string `json:"state,omitempty"`
 }
 
+// RemoteItem is a facet that appears for shared items only.
+// https://docs.microsoft.com/en-us/onedrive/developer/rest-api/api/drive_sharedwithme
+type RemoteItem struct {
+	ID     string           `json:"id,omitempty"`
+	Parent *DriveItemParent `json:"parentReference,omitempty"`
+}
+
 // DriveItem contains the data fields from the Graph API
 // https://docs.microsoft.com/en-us/onedrive/developer/rest-api/resources/driveitem
 type DriveItem struct {
@@ -52,7 +60,13 @@ type DriveItem struct {
 	Folder           *Folder          `json:"folder,omitempty"`
 	File             *File            `json:"file,omitempty"`
 	Deleted          *Deleted         `json:"deleted,omitempty"`
+	RemoteItem       *RemoteItem      `json:"remoteItem,omitempty"`
 	ConflictBehavior string           `json:"@microsoft.graph.conflictBehavior,omitempty"`
+}
+
+// IsShared returns whether an item is shared from another drive
+func (d *DriveItem) IsShared() bool {
+	return d.RemoteItem != nil
 }
 
 // GetItem fetches a DriveItem by ID. ID can also be "root" for the root item.
@@ -144,4 +158,31 @@ func Rename(itemID string, itemName string, parentID string, auth *Auth) error {
 		_, err = Patch("/me/drive/items/"+itemID, auth, bytes.NewReader(jsonPatch))
 	}
 	return err
+}
+
+// for parsing only
+type sharedChildren struct {
+	Children []*DriveItem `json:"value"`
+	NextLink string       `json:"@odata.nextLink"`
+}
+
+// GetSharedItems fetches all shared items and sorta functions as its own drive root.
+// Items here need to be accessed via /drives/<drive-id>/items/<item-id>
+func GetSharedItems(auth *Auth) ([]*DriveItem, error) {
+	children := make([]*DriveItem, 0)
+	var err error
+	for pollURL := "/me/drive/sharedWithMe"; pollURL != ""; {
+		var page *sharedChildren
+		var resp []byte
+		resp, err = Get("/me/drive/sharedWithMe", auth)
+		if err != nil {
+			break
+		}
+		if err = json.Unmarshal(resp, page); err != nil {
+			break
+		}
+		children = append(children, page.Children...)
+		pollURL = page.NextLink
+	}
+	return children, err
 }
